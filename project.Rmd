@@ -1,0 +1,560 @@
+---
+title: "Project"
+author: "Jonathan Serrano"
+date: "2023-04-23"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+**1. Cleaning Data**
+```{R}
+
+# Read Data
+emissionsDF <- read.csv("data/CO2 Emissions_Canada.csv")
+
+# Look for NA's
+which(is.na(emissionsDF))
+
+# Add Dummy variables for Fuel Type exclude Z
+lvl <- unique(emissionsDF$Fuel.Type)    
+res <- data.frame(fuel=emissionsDF$Fuel.Type,
+            do.call(rbind,lapply(emissionsDF$Fuel.Type, function(x) table(factor(x, levels=lvl)))), 
+                                       stringsAsFactors=FALSE)
+
+# Add Dummy variables for Transmission exclude AV10
+lvl2 <- unique(emissionsDF$Transmission)    
+res2 <- data.frame(Trasmission=emissionsDF$Transmission,
+            do.call(rbind,lapply(emissionsDF$Transmission, function(x) table(factor(x, levels=lvl2)))), 
+                                       stringsAsFactors=FALSE)
+
+# Add Dummy variables for Vehicle Class exclude PICKUP.TRUCK...SMALL
+lvl3 <- unique(emissionsDF$Vehicle.Class)    
+res3 <- data.frame(Class=emissionsDF$Vehicle.Class,
+            do.call(rbind,lapply(emissionsDF$Vehicle.Class, function(x) table(factor(x, levels=lvl3)))), 
+                                       stringsAsFactors=FALSE)
+
+# Add Columns to DataFrame
+emissionsDF <- cbind(emissionsDF, res[2:5])
+emissionsDF <- cbind(emissionsDF, res2[2:27])
+emissionsDF <- cbind(emissionsDF, res3[2:16])
+
+
+# Remove MPG column
+emissionsDF <- emissionsDF[,-11]
+emissionsDF <- emissionsDF[,-2]
+
+# Summary of data 
+summary(emissionsDF)
+
+```
+
+
+
+**2. Exploring Data**
+```{R}
+table(emissionsDF$Vehicle.Class) # Could Work
+table(emissionsDF$Make) # Too Many small values
+table(emissionsDF$Fuel.Type) #  Could Work
+table(emissionsDF$Transmission) # # Could Work
+```
+
+
+
+```{R}
+names <- c("Engine", "Cylinders", "Fuel Comp City", "Fuel Comp Hwy", "Fuel Comp Comb", "C02 Emissions")
+# Look at correlations
+corMatrix <- cor(emissionsDF[,c(3,4,7:10)])
+colnames(corMatrix) <- names
+rownames(corMatrix) <- names
+corMatrix
+corMatrix[6,]
+```
+
+
+
+
+
+```{R}
+library(ggplot2)
+library(reshape2)
+
+# Plot correlations
+
+get_upper_tri <- function(cormat) {
+    cormat[lower.tri(cormat)]<- NA
+    return(cormat)
+}
+melted_cormat <- melt(get_upper_tri(corMatrix), na.rm = TRUE)
+
+ggplot(data = melted_cormat, aes(x=Var1, y=Var2, fill=-value)) + 
+  geom_tile() + 
+  theme(axis.text.x = element_text(angle = -45, vjust = 1, 
+        size = 12, hjust = 1))
+
+#count
+ggplot(emissionsDF, aes(CO2.Emissions.g.km.)) +
+  geom_bar(aes(fill = "blue"), show.legend = FALSE) +
+  theme_minimal() +
+  labs(title = "CO2 Emissions Distribution")
+
+sd(emissionsDF$CO2.Emissions.g.km.)
+
+# Plot correlations
+emissionsDFPlot <- melt(emissionsDF[,c(3,4,7:10)], id.vars = "CO2.Emissions.g.km.")
+
+levels(emissionsDFPlot$variable) <- names
+
+
+
+ggplot(emissionsDFPlot) +
+  geom_jitter(aes(value,CO2.Emissions.g.km., color=variable)) +
+  geom_smooth(aes(value,CO2.Emissions.g.km.),color="black",  method=lm, se=FALSE) +
+  facet_wrap(~variable, scales="free_x")
+```
+
+```{R}
+
+firstfit <- lm(CO2.Emissions.g.km. ~ Engine.Size.L. + Cylinders + 
+            Fuel.Consumption.City..L.100.km. + Fuel.Consumption.Hwy..L.100.km. +
+            Fuel.Consumption.Comb..L.100.km. + Fuel.Type + Transmission +
+            Vehicle.Class,data=emissionsDF)
+
+
+residualPlot(firstfit, type="rstudent", quadratic=F, col = "dodgerblue",
+pch=16, cex=1.5, cex.axis=1.5, cex.lab=1.5)
+
+
+
+summary(lm(CO2.Emissions.g.km. ~ Fuel.Consumption.Comb..L.100.km., data = emissionsDF))
+
+emissionsDF2 <- melt(emissionsDF[,c(9,10)], id.vars = "CO2.Emissions.g.km.")
+ggplot(emissionsDF2) +
+  geom_jitter(aes(value,CO2.Emissions.g.km., colour=variable)) +
+  geom_smooth(aes(value,CO2.Emissions.g.km.), colour="black", method=lm, se=FALSE) +
+  geom_abline(intercept = 0, slope = 20, color="blue") + 
+  facet_wrap(~variable, scales="free_x")
+```
+
+
+```{R}
+emissionsDF<- emissionsDF[!(emissionsDF$CO2.Emissions.g.km. < 20 * emissionsDF$Fuel.Consumption.Comb..L.100.km.),]
+
+
+emissionsDFPlot2 <- melt(emissionsDF[,c(3,4,7:10)], id.vars = "CO2.Emissions.g.km.")
+
+levels(emissionsDFPlot2$variable) <- names
+
+ggplot(emissionsDFPlot2) +
+  geom_jitter(aes(value,CO2.Emissions.g.km., colour=variable)) +
+  geom_smooth(aes(value,CO2.Emissions.g.km.), colour="black", method=lm, se=FALSE) +
+  facet_wrap(~variable, scales="free_x")
+
+```
+
+**Look for Outliers**
+
+```{R}
+library(MASS)
+
+firstfit <- lm(CO2.Emissions.g.km. ~ Engine.Size.L. + Cylinders + 
+            Fuel.Consumption.City..L.100.km. + Fuel.Consumption.Hwy..L.100.km. +
+            Fuel.Consumption.Comb..L.100.km. + Fuel.Type + Transmission +
+            Vehicle.Class,data=emissionsDF)
+
+
+barplot(height = stdres(firstfit),
+main = "Standardized Residuals", xlab = "Index",
+ylab = "Standardized Resid", ylim=c(-4,4))
+#Add cutoff values. Either 2 or 3 can be chosen.
+abline(h=3, col = "Red", lwd=2)
+abline(h=-3, col = "Red", lwd=2)
+
+
+barplot(height = studres(firstfit),
+main = "Studentized Residuals", xlab = "Index",
+ylab = "Studentized Resid", ylim=c(-4,4))
+#Add cutoff values. Either 2 or 3 can be chosen.
+abline(h=3, col = "Red", lwd=2)
+abline(h=-3, col = "Red", lwd=2)
+  
+```
+
+**Remove Outliers**
+```{R}
+noOutliersBool <- abs(stdres(firstfit)) < 3
+
+noOutliersDF <- emissionsDF[noOutliersBool,]
+
+fitNoOutliers <- lm(CO2.Emissions.g.km. ~ Engine.Size.L. + Cylinders + 
+            Fuel.Consumption.City..L.100.km. + Fuel.Consumption.Hwy..L.100.km. +
+            Fuel.Consumption.Comb..L.100.km. + Fuel.Type + Transmission +
+            Vehicle.Class, data = noOutliersDF)
+
+
+
+barplot(height = stdres(fitNoOutliers),
+main = "Standardized Residuals", xlab = "Index",
+ylab = "Standardized Resid", ylim=c(-4,4))
+#Add cutoff values. Either 2 or 3 can be chosen.
+abline(h=3, col = "Red", lwd=2)
+abline(h=-3, col = "Red", lwd=2)
+
+
+barplot(height = studres(fitNoOutliers),
+main = "Studentized Residuals", xlab = "Index",
+ylab = "Studentized Resid", ylim=c(-4,4))
+#Add cutoff values. Either 2 or 3 can be chosen.
+abline(h=3, col = "Red", lwd=2)
+abline(h=-3, col = "Red", lwd=2)
+```
+
+**Remove Outliers 2**
+```{R}
+noOutliersBool2 <- abs(stdres(fitNoOutliers)) < 3
+
+noOutliersDF2 <- noOutliersDF[noOutliersBool2,]
+
+fitNoOutliers2 <- lm(CO2.Emissions.g.km. ~ Engine.Size.L. + Cylinders + 
+            Fuel.Consumption.City..L.100.km. + Fuel.Consumption.Hwy..L.100.km. +
+            Fuel.Consumption.Comb..L.100.km. + Fuel.Type + Transmission +
+            Vehicle.Class, data = noOutliersDF2)
+
+
+barplot(height = stdres(fitNoOutliers2),
+main = "Standardized Residuals", xlab = "Index",
+ylab = "Standardized Resid", ylim=c(-4,4))
+#Add cutoff values. Either 2 or 3 can be chosen.
+abline(h=3, col = "Red", lwd=2)
+abline(h=-3, col = "Red", lwd=2)
+
+
+barplot(height = studres(fitNoOutliers2),
+main = "Studentized Residuals", xlab = "Index",
+ylab = "Studentized Resid", ylim=c(-4,4))
+#Add cutoff values. Either 2 or 3 can be chosen.
+abline(h=3, col = "Red", lwd=2)
+abline(h=-3, col = "Red", lwd=2)
+```
+
+**Look for Influential Points**
+```{R}
+library(car)
+dfbetasPlots(fitNoOutliers2, intercept=T)
+influenceIndexPlot(fitNoOutliers2)
+myInf <- influence.measures(fitNoOutliers2)
+summary(myInf)
+```
+
+**Distribution of Residuals**
+```{R}
+par(mfrow=c(1,2))
+hist(studres(fitNoOutliers2), breaks=10, freq=F, col="cornflowerblue",
+cex.axis=1.5, cex.lab=1.5, cex.main=2)
+qqPlot(fitNoOutliers2)
+```
+
+```{R}
+residualPlot(firstfit, type="rstudent", quadratic=F, col = "dodgerblue",
+pch=16, cex=1.5, cex.axis=1.5, cex.lab=1.5)
+
+
+residualPlot(fit2NoOutliers, type="rstudent", quadratic=F, col = "dodgerblue",
+pch=16, cex=1.5, cex.axis=1.5, cex.lab=1.5)
+
+residualPlot(fitNoOutliers2, type="rstudent", quadratic=F, col = "dodgerblue",
+pch=16, cex=1.5, cex.axis=1.5, cex.lab=1.5)
+```
+
+
+```{R}
+table(noOutliersDF2$Vehicle.Class) 
+table(noOutliersDF2$Fuel.Type) 
+table(noOutliersDF2$Transmission) 
+```
+
+**Multicollinearity Test**
+
+```{R}
+library(car)
+
+
+
+fitOG <- lm(CO2.Emissions.g.km. ~ Engine.Size.L. + Cylinders + 
+            Fuel.Consumption.City..L.100.km. + Fuel.Consumption.Hwy..L.100.km. +
+            Fuel.Consumption.Comb..L.100.km. + Fuel.Type + Transmission +
+            Vehicle.Class, data=noOutliersDF2)
+
+vif(fitOG) 
+
+#---------------------------- Check for Fuel Consumption------------#
+# look at City
+fit.city <- lm(Fuel.Consumption.City..L.100.km. ~ Engine.Size.L. + Cylinders + 
+                 Fuel.Consumption.Hwy..L.100.km. +
+                 Fuel.Consumption.Comb..L.100.km. + Fuel.Type + Transmission +
+                  Vehicle.Class, data=noOutliersDF2)
+vif(fit.city)
+summary(fit.city)
+
+# look at hwy
+fit.hwy <- lm(Fuel.Consumption.Hwy..L.100.km. ~ Engine.Size.L. + Cylinders + 
+                 Fuel.Consumption.City..L.100.km. +
+                 Fuel.Consumption.Comb..L.100.km. + Fuel.Type + Transmission +
+                  Vehicle.Class, data=noOutliersDF2)
+vif(fit.hwy)
+summary(fit.hwy)
+
+# look at combo
+fit.combo <- lm(Fuel.Consumption.Comb..L.100.km. ~ Engine.Size.L. + Cylinders + 
+                 Fuel.Consumption.City..L.100.km. +
+                 Fuel.Consumption.Hwy..L.100.km. + Fuel.Type + Transmission +
+                  Vehicle.Class, data=noOutliersDF2)
+vif(fit.combo)
+summary(fit.combo)
+#------------------------------------------------------------------#
+
+
+fit <- lm(CO2.Emissions.g.km. ~ Engine.Size.L. + Cylinders + 
+            Fuel.Consumption.Comb..L.100.km. + Fuel.Type + Transmission +
+            Vehicle.Class, data=noOutliersDF2)
+
+vif(fit)
+
+
+#--Shows Engine Size and Cylinders Count are correlated-----------------#
+fit.engine <- lm(Engine.Size.L. ~  Cylinders + 
+            Fuel.Consumption.Comb..L.100.km. + Fuel.Type + Transmission +
+            Vehicle.Class, data=noOutliersDF2)
+
+vif(fit.engine)
+summary(fit.engine)
+#-----------------------------------------------------------------------#
+
+
+fit <- lm(CO2.Emissions.g.km. ~ Engine.Size.L. + 
+            Fuel.Consumption.Comb..L.100.km. + Fuel.Type + Transmission +
+            Vehicle.Class, data=noOutliersDF2)
+
+vif(fit) # Transmission and Vehicle Class are correlated
+
+
+# With no Vehicle Class
+fit <- lm(CO2.Emissions.g.km. ~ Engine.Size.L. + 
+            Fuel.Consumption.Comb..L.100.km. + Fuel.Type + Transmission,
+             data=noOutliersDF2)
+
+vif(fit)
+
+# With no Transmission
+fit <- lm(CO2.Emissions.g.km. ~ Engine.Size.L. + 
+            Fuel.Consumption.Comb..L.100.km. + Fuel.Type + Vehicle.Class,
+             data=noOutliersDF2)
+
+vif(fit)
+```
+
+
+**Multilinear Regression Models**
+
+```{R}
+
+# No significant results 
+fit0 = lm(CO2.Emissions.g.km.~1,data = noOutliersDF2)
+stepAIC(fit0,direction="forward", scope=list(lower=fit0, upper=fitOG))
+stepAIC(fitOG,direction="backward")
+stepAIC(fit0,direction="both", scope=list(lower=fit0, upper=fitOG))
+```
+
+
+```{R}
+
+
+# -- Engine Size and Transmission ------------------#
+f1.0  <- lm(CO2.Emissions.g.km. ~ Engine.Size.L. + 
+            Fuel.Consumption.City..L.100.km. + D + X +
+            A10+A4+A5+A6+A7+A8+A9+AM5+AM6+AM7+AM8+AM9+AS10+AS4+AS5+AS6+AS7+AS8+
+            AS9+AV+AV6+AV7+AV8+M5+M6+M7,
+             data=noOutliersDF2)
+
+f2.0 <- lm(CO2.Emissions.g.km. ~ Engine.Size.L. + 
+            Fuel.Consumption.Comb..L.100.km. + D + X +
+           A10+A4+A5+A6+A7+A8+A9+AM5+AM6+AM7+AM8+AM9+AS10+AS4+AS5+AS6+AS7+AS8+
+            AS9+AV+AV6+AV7+AV8+M5+M6+M7,
+             data=noOutliersDF2)
+
+f3.0 <- lm(CO2.Emissions.g.km. ~ Engine.Size.L. + 
+            Fuel.Consumption.Hwy..L.100.km. + D + X +
+            A10+A4+A5+A6+A7+A8+A9+AM5+AM6+AM7+AM8+AM9+AS10+AS4+AS5+AS6+AS7+AS8+
+            AS9+AV+AV6+AV7+AV8+M5+M6+M7,
+             data=noOutliersDF2)
+
+
+
+#----Engine Size and Vehicle Class------------------#
+f1.1 <- lm(CO2.Emissions.g.km. ~ Engine.Size.L. + 
+            Fuel.Consumption.City..L.100.km. + D + X +
+            COMPACT + SUV...SMALL + MID.SIZE + TWO.SEATER + MINICOMPACT + 
+            SUBCOMPACT + FULL.SIZE + STATION.WAGON...SMALL + SUV...STANDARD + 
+            VAN...CARGO + VAN...PASSENGER + PICKUP.TRUCK...STANDARD + MINIVAN +
+            SPECIAL.PURPOSE.VEHICLE + STATION.WAGON...MID.SIZE,
+             data=noOutliersDF2)
+
+f2.1 <- lm(CO2.Emissions.g.km. ~ Engine.Size.L. + 
+            Fuel.Consumption.Comb..L.100.km. + D + X +
+            COMPACT + SUV...SMALL + MID.SIZE + TWO.SEATER + MINICOMPACT + 
+            SUBCOMPACT + FULL.SIZE + STATION.WAGON...SMALL + SUV...STANDARD + 
+            VAN...CARGO + VAN...PASSENGER + PICKUP.TRUCK...STANDARD + MINIVAN +
+            SPECIAL.PURPOSE.VEHICLE + STATION.WAGON...MID.SIZE,
+             data=noOutliersDF2)
+
+f3.1 <- lm(CO2.Emissions.g.km. ~ Engine.Size.L. + 
+            Fuel.Consumption.Hwy..L.100.km. + D + X +
+            COMPACT + SUV...SMALL + MID.SIZE + TWO.SEATER + MINICOMPACT + 
+            SUBCOMPACT + FULL.SIZE + STATION.WAGON...SMALL + SUV...STANDARD + 
+            VAN...CARGO + VAN...PASSENGER + PICKUP.TRUCK...STANDARD + MINIVAN +
+            SPECIAL.PURPOSE.VEHICLE + STATION.WAGON...MID.SIZE,
+             data=noOutliersDF2)
+
+# -- Cylinder Count and Transmission ------------------#
+f1.2 <- lm(CO2.Emissions.g.km. ~ Cylinders + 
+            Fuel.Consumption.City..L.100.km. + D + X +
+            A10+A4+A5+A6+A7+A8+A9+AM5+AM6+AM7+AM8+AM9+AS10+AS4+AS5+AS6+AS7+AS8+
+            AS9+AV+AV6+AV7+AV8+M5+M6+M7,
+             data=noOutliersDF2)
+
+f2.2 <- lm(CO2.Emissions.g.km. ~ Cylinders + 
+            Fuel.Consumption.Comb..L.100.km. + D + X +
+           A10+A4+A5+A6+A7+A8+A9+AM5+AM6+AM7+AM8+AM9+AS10+AS4+AS5+AS6+AS7+AS8+
+            AS9+AV+AV6+AV7+AV8+M5+M6+M7,
+             data=noOutliersDF2)
+
+f3.2 <- lm(CO2.Emissions.g.km. ~ Cylinders + 
+            Fuel.Consumption.Hwy..L.100.km. + D + X +
+            A10+A4+A5+A6+A7+A8+A9+AM5+AM6+AM7+AM8+AM9+AS10+AS4+AS5+AS6+AS7+AS8+
+            AS9+AV+AV6+AV7+AV8+M5+M6+M7,
+             data=noOutliersDF2)
+
+#---- Cylinder Count and Vehicle Class------------------#
+f1.3 <- lm(CO2.Emissions.g.km. ~ Cylinders + 
+            Fuel.Consumption.City..L.100.km. + D + X +
+            COMPACT + SUV...SMALL + MID.SIZE + TWO.SEATER + MINICOMPACT + 
+            SUBCOMPACT + FULL.SIZE + STATION.WAGON...SMALL + SUV...STANDARD + 
+            VAN...CARGO + VAN...PASSENGER + PICKUP.TRUCK...STANDARD + MINIVAN +
+            SPECIAL.PURPOSE.VEHICLE + STATION.WAGON...MID.SIZE,
+             data=noOutliersDF2)
+
+f2.3 <- lm(CO2.Emissions.g.km. ~ Cylinders + 
+            Fuel.Consumption.Comb..L.100.km. + D + X +
+            COMPACT + SUV...SMALL + MID.SIZE + TWO.SEATER + MINICOMPACT + 
+            SUBCOMPACT + FULL.SIZE + STATION.WAGON...SMALL + SUV...STANDARD + 
+            VAN...CARGO + VAN...PASSENGER + PICKUP.TRUCK...STANDARD + MINIVAN +
+            SPECIAL.PURPOSE.VEHICLE + STATION.WAGON...MID.SIZE,
+             data=noOutliersDF2)
+
+f3.3 <- lm(CO2.Emissions.g.km. ~ Cylinders + 
+            Fuel.Consumption.Hwy..L.100.km. + D + X +
+            COMPACT + SUV...SMALL + MID.SIZE + TWO.SEATER + MINICOMPACT + 
+            SUBCOMPACT + FULL.SIZE + STATION.WAGON...SMALL + SUV...STANDARD + 
+            VAN...CARGO + VAN...PASSENGER + PICKUP.TRUCK...STANDARD + MINIVAN +
+            SPECIAL.PURPOSE.VEHICLE + STATION.WAGON...MID.SIZE,
+             data=noOutliersDF2)
+```
+
+
+**ANOVA**
+```{R}
+
+# Both 3.84
+qf(p=.05, df1=1, df2=6909, lower.tail=FALSE)
+qf(p=.05, df1=1, df2=6920, lower.tail=FALSE)
+
+
+anova(f1.0)
+anova(f2.0)
+anova(f3.0)
+anova(f1.1)
+anova(f2.1)
+anova(f3.1)
+anova(f1.2)
+anova(f2.2)
+anova(f3.2)
+anova(f1.3)
+anova(f2.3)
+anova(f3.3)
+
+summary(f1.0)
+summary(f2.0)
+summary(f3.0)
+summary(f1.1)
+summary(f2.1)
+summary(f3.1)
+summary(f1.2)
+summary(f2.2)
+summary(f3.2)
+summary(f1.3)
+summary(f2.3)
+summary(f3.3)
+
+# In all expect two below, there were too low F-value (below 3.84)  
+# or high p-values (above 0.05)
+
+# is 1.96
+abs(qt(0.05/2, 6920, lower.tail=TRUE))
+
+
+# Two best Ones
+summary(f1.1) # City, Engine, Class
+#  Engine has low t-value and PICKUP.TRUCK...STANDARD
+
+summary(f1.3) # City, Cylinders, Class
+#  PICKUP.TRUCK...STANDARD
+
+
+f.reduced <- lm(CO2.Emissions.g.km. ~ Cylinders + 
+            Fuel.Consumption.City..L.100.km. + D + X,
+             data=noOutliersDF2)
+
+f.reduced2 <- lm(CO2.Emissions.g.km. ~ Engine.Size.L. + 
+            Fuel.Consumption.City..L.100.km. + D + X,
+             data=noOutliersDF2)
+
+# 1.67
+qf(p=.05, df1=15, df2=6920, lower.tail=FALSE)
+
+# Both are above 
+anova(f.reduced, f1.3)
+anova(f.reduced2, f1.1)
+
+
+anova(f.reduced)
+summary(f.reduced)
+
+f1.3.new <- lm(CO2.Emissions.g.km. ~ Cylinders + 
+            Fuel.Consumption.City..L.100.km. + D + X +
+            COMPACT + SUV...SMALL + MID.SIZE + TWO.SEATER + MINICOMPACT + 
+            SUBCOMPACT + FULL.SIZE + STATION.WAGON...SMALL + SUV...STANDARD + 
+            VAN...CARGO + VAN...PASSENGER  + MINIVAN +
+            SPECIAL.PURPOSE.VEHICLE + STATION.WAGON...MID.SIZE,
+             data=noOutliersDF2)
+
+anova(f1.3.new)
+summary(f1.3.new)
+
+```
+
+**Conclusion**
+```{R}
+# f1.3 is best (exclude PICKUP.TRUCK...STANDARD tho)
+avPlots(f1.3.new)
+```
+
+
+
+
+
+
+
+
